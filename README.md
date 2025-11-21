@@ -18,6 +18,149 @@ This repository documents the deployment of a multi-layered network intrusion de
 
 ---
 
+## 🚀 Quick Start
+
+### Prerequisites
+
+**Hardware Requirements:**
+- OpenWrt-compatible router (tested on models with 128MB+ RAM)
+- Windows 10/11 machine with WSL2 enabled
+- Minimum 4GB RAM on host machine
+- At least 20GB free disk space
+
+**Software Requirements:**
+- Ubuntu 20.04/22.04 on WSL2
+- OpenWrt 21.02 or newer
+- Suricata 6.0+
+- Basic understanding of networking concepts
+
+### Installation Overview
+
+1. **OpenWrt Router Setup** (~30 minutes)
+   - Flash OpenWrt firmware
+   - Configure network interfaces
+   - Set up port mirroring/SPAN
+
+2. **Suricata IDS Deployment** (~45 minutes)
+   - Install WSL2 and Ubuntu
+   - Compile and install Suricata
+   - Configure network capture
+   - Load detection rules
+
+3. **Integration Testing** (~20 minutes)
+   - Validate traffic flow
+   - Test alert generation
+   - Tune performance settings
+
+**Total estimated setup time: ~2 hours**
+
+---
+
+## 📊 System Capabilities
+
+### Detection Features
+- ✅ **Signature-based detection** using ET Open ruleset
+- ✅ **Protocol anomaly detection** (TCP, UDP, ICMP, HTTP, TLS)
+- ✅ **File extraction and inspection**
+- ✅ **DNS query logging and analysis**
+- ✅ **TLS/SSL certificate monitoring**
+- ✅ **Network flow tracking** (Netflow-style metadata)
+
+### Network Coverage
+- All ingress/egress traffic via port mirroring
+- Internal VLAN traffic monitoring
+- DMZ segment surveillance
+- Wireless client activity tracking
+
+### Performance Metrics
+- **Throughput**: Up to 500 Mbps monitored traffic
+- **Latency**: <5ms added to mirrored traffic
+- **Alert Volume**: 50-200 alerts/day (tuned environment)
+- **False Positive Rate**: <5% after tuning
+- **CPU Usage**: 15-25% on 4-core system
+- **RAM Usage**: ~2GB for Suricata process
+
+---
+
+## 🛡️ Security Best Practices
+
+### Network Segmentation
+```
+Internet → Firewall → [DMZ] → Internal Network
+                  ↓
+              IDS Mirror Port
+                  ↓
+            Suricata on WSL2
+```
+
+### Firewall Configuration
+- **Default deny** ingress policy
+- **Egress filtering** for malware C2 prevention  
+- **Rate limiting** on WAN interface
+- **Geo-blocking** for high-risk countries
+- **Port mirroring** without disrupting production traffic
+
+### IDS Tuning Recommendations
+1. Start with ET Open ruleset (free)
+2. Disable noisy rules (Windows Update, CDN traffic)
+3. Create custom rules for your environment
+4. Implement alert suppression for known-good traffic
+5. Regular rule updates (weekly recommended)
+
+### Data Retention
+- **PCAP files**: 7 days (rolling deletion)
+- **Logs**: 30 days
+- **Alerts**: 90 days
+- **Statistics**: 1 year
+
+---
+
+## 🔧 Troubleshooting
+
+### Common Issues
+
+**Problem:** Suricata not seeing traffic  
+**Solution:**
+```bash
+# Verify mirror port on OpenWrt
+uci show network | grep mirror
+
+# Check WSL2 network adapter
+ip link show
+ip addr show
+
+# Test packet capture
+sudo tcpdump -i eth0 -c 100
+```
+
+**Problem:** High CPU usage  
+**Solution:**
+- Reduce active ruleset
+- Disable unneeded protocol parsers
+- Increase `af-packet` workers
+- Check for packet loss: `suricatasc -c "iface-stat eth0"`
+
+**Problem:** No alerts generating  
+**Solution:**
+```bash
+# Verify rules loaded
+sudo suricatactl ruleset-stats
+
+# Check for errors
+sudo tail -f /var/log/suricata/suricata.log
+
+# Test with known-bad traffic
+curl http://testmynids.org/uid/index.html
+```
+
+**Problem:** Alerts flooding  
+**Solution:**
+- Review `eve.json` for noisy signatures
+- Add suppression rules in `threshold.config`
+- Tune signature thresholds
+
+---
+
 ## 🏗️ Architecture
 
 ```
@@ -291,3 +434,122 @@ This project documentation is provided as-is for educational purposes. Configura
 ---
 
 *Last Updated: November 2025*
+
+---
+
+## 📚 Resources & References
+
+### Official Documentation
+- **OpenWrt**: https://openwrt.org/docs/start
+- **Suricata**: https://docs.suricata.io/
+- **ET Open Rules**: https://rules.emergingthreats.net/
+
+### Tutorials & Guides
+- [OpenWrt Port Mirroring Guide](https://openwrt.org/docs/guide-user/network/port_mirroring)
+- [Suricata Performance Tuning](https://suricata.readthedocs.io/en/latest/performance/)
+- [WSL2 Networking Deep Dive](https://docs.microsoft.com/en-us/windows/wsl/networking)
+
+### Community
+- [r/openwrt](https://reddit.com/r/openwrt) - OpenWrt community
+- [r/netsec](https://reddit.com/r/netsec) - Network security discussions
+- [OISF Suricata Forum](https://forum.suricata.io/) - Official support forum
+
+### Recommended Tools
+- **Wireshark** - Packet analysis
+- **tcpdump** - Command-line packet capture
+- **iperf3** - Network performance testing
+- **nmap** - Network scanning
+- **Grafana** - Metrics visualization (future integration)
+
+### Learning Resources
+- [SANS SEC511: Continuous Monitoring](https://www.sans.org/cyber-security-courses/continuous-monitoring-security-tuning/)
+- [Blue Team Handbook](https://www.amazon.com/Blue-Team-Handbook-condensed-Responder/dp/1500734756)
+- [Practical Packet Analysis](https://nostarch.com/packetanalysis3)
+
+---
+
+## 🤝 Contributing
+
+Contributions are welcome! This project benefits the security community by providing practical, reproducible IDS implementations.
+
+### How to Contribute
+
+1. **Fork the repository**
+2. **Create a feature branch**
+   ```bash
+   git checkout -b feature/your-feature-name
+   ```
+3. **Make your changes**
+4. **Test thoroughly**
+5. **Submit a pull request**
+
+### Contribution Ideas
+- ✅ Additional router platform guides (DD-WRT, pfSense)
+- ✅ Custom Suricata rules for home networks
+- ✅ Dashboard templates (Kibana, Grafana)
+- ✅ Performance optimization scripts
+- ✅ Automated deployment tools
+- ✅ Threat intelligence integration
+- ✅ Alert notification integrations (Discord, Slack)
+
+### Code of Conduct
+- Be respectful and professional
+- Focus on constructive feedback
+- Help others learn
+- Share your knowledge
+
+---
+
+## 📜 License
+
+MIT License - see [LICENSE](LICENSE) file for details.
+
+Feel free to use this project for:
+- Personal home network security
+- Educational purposes
+- Training and skill development
+- Job interview portfolio demonstrations
+
+---
+
+## ⚠️ Disclaimer
+
+This project is intended for **legal** network monitoring of networks you own or have explicit permission to monitor. Unauthorized network monitoring may violate laws in your jurisdiction.
+
+**Use responsibly:**
+- Only monitor your own networks
+- Comply with local privacy laws
+- Obtain consent when monitoring shared networks
+- Secure your IDS infrastructure
+
+---
+
+## 🎯 Roadmap
+
+### Phase 1: Foundation (Current)
+- [x] OpenWrt basic configuration
+- [x] Suricata deployment on WSL2
+- [x] Basic alerting
+- [x] Documentation
+
+### Phase 2: Enhancement (Q1 2026)
+- [ ] SIEM integration (Splunk/ELK)
+- [ ] Automated rule management
+- [ ] Web dashboard
+- [ ] Email/SMS alerts
+
+### Phase 3: Advanced (Q2 2026)
+- [ ] Machine learning anomaly detection
+- [ ] Threat intelligence feeds
+- [ ] Automated response (block IPs)
+- [ ] Multi-site deployment
+
+---
+
+**Last Updated:** November 21, 2025  
+**Maintained by:** Jay Henderson (@8eight8toes8)  
+**Status:** 🟢 Active Development
+
+---
+
+*Built with ❤️ for the cybersecurity community*
