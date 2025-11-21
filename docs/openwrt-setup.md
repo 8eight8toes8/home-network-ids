@@ -1,528 +1,428 @@
-
-# Integration & Testing Guide
+# OpenWrt Router Configuration Guide
 
 ## Table of Contents
-1. [Traffic Flow Verification](#traffic-flow-verification)
-2. [Alert Validation](#alert-validation)
-3. [Performance Testing](#performance-testing)
-4. [False Positive Reduction](#false-positive-reduction)
-5. [SIEM Integration Testing](#siem-integration-testing)
-6. [Incident Response Testing](#incident-response-testing)
+1. [Initial Router Setup](#initial-router-setup)
+2. [Network Interface Configuration](#network-interface-configuration)
+3. [Firewall Rules Implementation](#firewall-rules-implementation)
+4. [Port Mirroring/SPAN Configuration](#port-mirroring-span-configuration)
+5. [DMZ and Network Segmentation](#dmz-and-network-segmentation)
+6. [Security Hardening](#security-hardening)
 
 ---
 
-## Traffic Flow Verification
+## Initial Router Setup
 
-### End-to-End Connectivity Test
+### Prerequisites
+- OpenWrt 23.05+ compatible router
+- Ethernet cable for initial configuration
+- SSH client (PuTTY, Terminal, or WSL)
 
-**Step 1: Verify OpenWrt Router Connectivity**
+### First Boot Configuration
 
-```bash
-# From client device
-ping 192.168.1.1
+1. **Connect to Router**
+   ```bash
+   # Default IP after fresh install
+   ssh root@192.168.1.1
+   # Default password is usually empty - press Enter
+   ```
 
-# Test internet connectivity through router
-ping 8.8.8.8
-curl -I https://google.com
-```
+2. **Set Root Password**
+   ```bash
+   passwd
+   # Enter new strong password twice
+   ```
 
-**Step 2: Verify Traffic Mirroring**
+3. **Update Package Lists**
+   ```bash
+   opkg update
+   opkg list-upgradable
+   opkg upgrade
+   ```
 
-On OpenWrt:
-```bash
-# Check iptables TEE rules
-iptables -t mangle -L -v -n | grep TEE
+4. **Install Essential Packages**
+   ```bash
+   # Network tools
+   opkg install tcpdump nmap iperf3
 
-# Monitor mirrored interface
-tcpdump -i eth0.3 -c 20
-```
+   # Traffic monitoring
+   opkg install vnstat luci-app-vnstat
 
-On WSL2:
-```bash
-# Capture packets on monitoring interface
-sudo tcpdump -i eth0 -c 20 -n
+   # Advanced firewall features
+   opkg install iptables-mod-tee iptables-mod-extra
 
-# Should see traffic from your network
-```
-
-**Step 3: Verify Suricata is Receiving Traffic**
-
-```bash
-# Check Suricata packet stats
-sudo suricatasc -c "pcap-current"
-
-# Output should show:
-# {
-#   "message": {
-#     "packets": 12345,
-#     "drop": 0,
-#     "invalid-checksums": 0
-#   }
-# }
-
-# Real-time packet count
-watch -n 1 'sudo suricatasc -c "pcap-current"'
-```
+   # Web interface improvements
+   opkg install luci-app-statistics luci-app-firewall
+   ```
 
 ---
 
-## Alert Validation
+## Network Interface Configuration
 
-### Generate Test Traffic
+### LAN Configuration
 
-#### 1. EICAR Test File (Malware Detection)
-
-```bash
-# Download EICAR test file
-curl http://testmyids.com/
-
-# Alternative direct download
-wget http://www.eicar.org/download/eicar.com
-```
-
-**Expected Alert:**
-```
-ET POLICY EICAR malware test file download detected
-```
-
-#### 2. Nmap Scan (Network Reconnaissance)
+Edit `/etc/config/network`:
 
 ```bash
-# From client device, scan router
-nmap -sS -p 1-1000 192.168.1.1
-
-# Aggressive scan
-nmap -A -T4 192.168.1.1
+config interface 'lan'
+    option type 'bridge'
+    option ifname 'eth0.1'
+    option proto 'static'
+    option ipaddr '192.168.1.1'
+    option netmask '255.255.255.0'
+    option ip6assign '60'
 ```
 
-**Expected Alerts:**
-```
-ET SCAN Potential SSH Scan
-ET SCAN NMAP -sS window 1024
-GPL SCAN nmap TCP
-```
-
-#### 3. SQL Injection Attempt (Web Attack)
+### WAN Configuration
 
 ```bash
-# Test against vulnerable test site
-curl "http://testphp.vulnweb.com/artists.php?artist=1' OR '1'='1"
+config interface 'wan'
+    option ifname 'eth0.2'
+    option proto 'dhcp'
+
+config interface 'wan6'
+    option ifname 'eth0.2'
+    option proto 'dhcpv6'
 ```
 
-**Expected Alert:**
-```
-ET WEB_SERVER SQL Injection Attempt
-```
+### IDS Monitoring Interface
 
-#### 4. Directory Traversal
+Create dedicated interface for Suricata traffic mirroring:
 
 ```bash
-# Attempt directory traversal
-curl "http://example.com/../../../../etc/passwd"
+config interface 'monitor'
+    option ifname 'eth0.3'
+    option proto 'static'
+    option ipaddr '192.168.100.1'
+    option netmask '255.255.255.0'
 ```
 
-**Expected Alert:**
-```
-ET WEB_SERVER Possible directory traversal attempt
-```
-
-### Verify Alerts Were Generated
-
+**Apply Changes:**
 ```bash
-# Check fast.log
-sudo tail -n 50 /var/log/suricata/fast.log
-
-# Search for specific alert
-sudo grep "EICAR" /var/log/suricata/fast.log
-
-# JSON formatted alerts
-sudo cat /var/log/suricata/eve.json | jq 'select(.event_type=="alert") | {timestamp: .timestamp, alert: .alert.signature, src_ip: .src_ip, dest_ip: .dest_ip}'
-```
-
-### Alert Analysis Examples
-
-**View Top 10 Alerts:**
-```bash
-cat /var/log/suricata/eve.json |   jq -r 'select(.event_type=="alert") | .alert.signature' |   sort | uniq -c | sort -rn | head -10
-```
-
-**Alerts by Source IP:**
-```bash
-cat /var/log/suricata/eve.json |   jq -r 'select(.event_type=="alert") | .src_ip' |   sort | uniq -c | sort -rn
-```
-
-**Alerts by Severity:**
-```bash
-cat /var/log/suricata/eve.json |   jq 'select(.event_type=="alert") | {severity: .alert.severity, signature: .alert.signature}' |   jq -s 'group_by(.severity) | map({severity: .[0].severity, count: length})'
+/etc/init.d/network restart
 ```
 
 ---
 
-## Performance Testing
+## Firewall Rules Implementation
 
-### Baseline Performance Metrics
+### Basic Firewall Zones
 
-#### 1. Packet Processing Rate
-
-```bash
-# Start Suricata with stats output
-sudo suricata -c /etc/suricata/suricata.yaml -i eth0 --init-errors-fatal -v
-
-# Monitor performance
-sudo suricatasc -c "dump-counters" | grep -E "capture.kernel_packets|capture.kernel_drops"
-```
-
-**Target Metrics:**
-- Packet drop rate: <1%
-- Processing latency: <100ms
-- Memory usage: <500MB
-- CPU usage: <25% (idle network)
-
-#### 2. Throughput Testing with iPerf3
-
-**On OpenWrt:**
-```bash
-opkg install iperf3
-iperf3 -s
-```
-
-**On Client:**
-```bash
-# Test bandwidth without IDS
-iperf3 -c 192.168.1.1 -t 30
-
-# Monitor Suricata during test
-sudo suricatasc -c "pcap-current"
-```
-
-**Expected Results:**
-- Minimal impact on throughput (<5% reduction)
-- No packet drops
-- Consistent latency
-
-#### 3. Load Testing
+Edit `/etc/config/firewall`:
 
 ```bash
-# Generate high traffic volume
-for i in {1..100}; do
-  curl -s http://example.com > /dev/null &
-done
+# LAN Zone - Trusted
+config zone
+    option name 'lan'
+    option input 'ACCEPT'
+    option output 'ACCEPT'
+    option forward 'ACCEPT'
+    option network 'lan'
 
-# Monitor Suricata performance
-htop -u suricata
-sudo iotop -u suricata
+# WAN Zone - Untrusted
+config zone
+    option name 'wan'
+    option input 'REJECT'
+    option output 'ACCEPT'
+    option forward 'REJECT'
+    option masq '1'
+    option mtu_fix '1'
+    option network 'wan wan6'
+
+# DMZ Zone - Restricted
+config zone
+    option name 'dmz'
+    option input 'REJECT'
+    option output 'ACCEPT'
+    option forward 'REJECT'
+    option network 'dmz'
 ```
 
-### Optimize Performance Issues
+### Forwarding Rules
 
-**If CPU usage is high:**
+```bash
+# Allow LAN to WAN
+config forwarding
+    option src 'lan'
+    option dest 'wan'
 
-Edit `/etc/suricata/suricata.yaml`:
-```yaml
-# Reduce worker threads
-threading:
-  detect-thread-ratio: 1.0
+# Allow LAN to DMZ
+config forwarding
+    option src 'lan'
+    option dest 'dmz'
 
-# Disable unused features
-app-layer:
-  protocols:
-    smb:
-      enabled: no
-    dcerpc:
-      enabled: no
+# Block DMZ to LAN
+config forwarding
+    option src 'dmz'
+    option dest 'lan'
+    option enabled '0'
 ```
 
-**If memory usage is high:**
-```yaml
-stream:
-  memcap: 64mb
-  reassembly:
-    memcap: 128mb
+### Custom Firewall Rules
+
+Create `/etc/firewall.user`:
+
+```bash
+#!/bin/sh
+
+# Drop invalid packets
+iptables -A INPUT -m conntrack --ctstate INVALID -j DROP
+
+# Rate limit SSH connections
+iptables -A INPUT -p tcp --dport 22 -m conntrack --ctstate NEW -m recent --set
+iptables -A INPUT -p tcp --dport 22 -m conntrack --ctstate NEW -m recent --update --seconds 60 --hitcount 4 -j DROP
+
+# Log dropped packets
+iptables -A INPUT -m limit --limit 5/min -j LOG --log-prefix "iptables denied: " --log-level 7
+
+# Allow established connections
+iptables -A INPUT -m conntrack --ctstate ESTABLISHED,RELATED -j ACCEPT
+
+# Allow loopback
+iptables -A INPUT -i lo -j ACCEPT
+
+# Block common attack patterns
+iptables -A INPUT -p tcp --tcp-flags ALL NONE -j DROP
+iptables -A INPUT -p tcp --tcp-flags ALL ALL -j DROP
+```
+
+Make executable:
+```bash
+chmod +x /etc/firewall.user
 ```
 
 ---
 
-## False Positive Reduction
+## Port Mirroring/SPAN Configuration
 
-### Identify False Positives
+### Method 1: Using TEE Target (Recommended)
 
-```bash
-# Find most frequent alerts
-cat /var/log/suricata/eve.json |   jq -r 'select(.event_type=="alert") | "\(.alert.signature) - \(.dest_ip)"' |   sort | uniq -c | sort -rn | head -20
-
-# Investigate specific alert
-cat /var/log/suricata/eve.json |   jq 'select(.event_type=="alert" and .alert.signature=="ALERT_NAME")'
-```
-
-### Common False Positives and Solutions
-
-#### 1. Internal Network Scanning (Legitimate)
-
-**Alert:** `ET SCAN Potential SSH Scan`
-
-**Solution - Whitelist Internal IPs:**
-
-Edit `/etc/suricata/threshold.config`:
-```bash
-# Suppress for internal management host
-suppress gen_id 1, sig_id 2001219, track by_src, ip 192.168.1.100
-```
-
-#### 2. Routine Windows Updates
-
-**Alert:** `ET POLICY Windows Update Check`
-
-**Solution:**
-```bash
-# Disable Windows update policies
-suppress gen_id 1, sig_id 2012647
-```
-
-#### 3. DNS Over HTTPS (DoH)
-
-**Alert:** `ET POLICY DNS over HTTPS`
-
-**Solution:**
-```yaml
-# In suricata.yaml, under modify rules
-modify:
-  - action: disable
-    rules:
-      - sid: 2029537
-```
-
-### Create Custom Suppressions
-
-Create `/etc/suricata/suppress.conf`:
+Add to `/etc/firewall.user`:
 
 ```bash
-# Suppress specific rule for specific host
-suppress gen_id 1, sig_id 2001219, track by_src, ip 192.168.1.50
-
-# Suppress entire category
-suppress gen_id 1, sig_id 2012647, track by_both
-
-# Suppress for network range
-suppress gen_id 1, sig_id 2010935, track by_src, ip 192.168.1.0/24
+# Mirror all traffic to IDS interface
+iptables -t mangle -A PREROUTING -j TEE --gateway 192.168.100.2
+iptables -t mangle -A POSTROUTING -j TEE --gateway 192.168.100.2
 ```
 
-Include in `suricata.yaml`:
-```yaml
-suppress-gen:
-  - file: /etc/suricata/suppress.conf
+### Method 2: Using tc (Traffic Control)
+
+```bash
+# Install tc package
+opkg install tc
+
+# Create mirroring rule
+tc qdisc add dev br-lan ingress
+tc filter add dev br-lan parent ffff: protocol all u32 match u8 0 0 action mirred egress mirror dev eth0.3
+```
+
+### Verify Traffic Mirroring
+
+```bash
+# On OpenWrt router
+tcpdump -i eth0.3 -c 10
+
+# Should see mirrored packets
 ```
 
 ---
 
-## SIEM Integration Testing
+## DMZ and Network Segmentation
 
-### Splunk Integration
+### VLAN Configuration
 
-#### 1. Configure Splunk Forwarder
-
-```bash
-# Install Splunk Universal Forwarder on WSL2
-wget -O splunkforwarder.tgz 'https://www.splunk.com/bin/splunk/DownloadActivityServlet?...'
-sudo tar xvzf splunkforwarder.tgz -C /opt
-
-# Configure inputs
-sudo /opt/splunkforwarder/bin/splunk add monitor /var/log/suricata/eve.json   -sourcetype suricata:json   -index security
-
-# Add forward server
-sudo /opt/splunkforwarder/bin/splunk add forward-server splunk.example.com:9997
-```
-
-#### 2. Test Log Forwarding
+Edit `/etc/config/network`:
 
 ```bash
-# Generate test alert
-curl http://testmyids.com
+# VLAN 10 - Main LAN
+config switch_vlan
+    option device 'switch0'
+    option vlan '1'
+    option ports '0 1 2 3 6t'
+    option vid '10'
 
-# Check forwarder queue
-/opt/splunkforwarder/bin/splunk list forward-server
+# VLAN 20 - DMZ
+config switch_vlan
+    option device 'switch0'
+    option vlan '2'
+    option ports '4 6t'
+    option vid '20'
 
-# Verify in Splunk
-# Search: index=security sourcetype=suricata:json
+# VLAN 100 - IDS Monitoring
+config switch_vlan
+    option device 'switch0'
+    option vlan '3'
+    option ports '5 6t'
+    option vid '100'
 ```
 
-### ELK Stack Integration
-
-#### 1. Filebeat Configuration
-
-Create `/etc/filebeat/filebeat.yml`:
-
-```yaml
-filebeat.inputs:
-- type: log
-  enabled: true
-  paths:
-    - /var/log/suricata/eve.json
-  json.keys_under_root: true
-  json.add_error_key: true
-  fields:
-    type: suricata
-
-output.elasticsearch:
-  hosts: ["elasticsearch.example.com:9200"]
-  index: "suricata-%{+yyyy.MM.dd}"
-```
-
-#### 2. Test Connection
+### DMZ Interface Configuration
 
 ```bash
-# Test Elasticsearch connection
-filebeat test output
+config interface 'dmz'
+    option type 'bridge'
+    option ifname 'eth0.20'
+    option proto 'static'
+    option ipaddr '192.168.20.1'
+    option netmask '255.255.255.0'
+```
 
-# Test configuration
-filebeat test config
+### DHCP for DMZ
 
-# Start Filebeat
-sudo systemctl start filebeat
+Edit `/etc/config/dhcp`:
+
+```bash
+config dhcp 'dmz'
+    option interface 'dmz'
+    option start '100'
+    option limit '50'
+    option leasetime '12h'
+    option dhcpv6 'server'
+    option ra 'server'
 ```
 
 ---
 
-## Incident Response Testing
+## Security Hardening
 
-### Scenario 1: Port Scan Detection
+### Disable Unused Services
 
-**Simulate:**
 ```bash
-nmap -sS 192.168.1.0/24
+# List running services
+/etc/init.d/*
+
+# Disable unnecessary services
+/etc/init.d/uhttpd disable
+/etc/init.d/dnsmasq stop  # If using external DNS
 ```
 
-**Detect:**
+### SSH Hardening
+
+Edit `/etc/config/dropbear`:
+
 ```bash
-# Alert should trigger
-grep "SCAN" /var/log/suricata/fast.log
+config dropbear
+    option PasswordAuth 'off'  # Use keys only
+    option RootPasswordAuth 'off'
+    option Port '2222'  # Non-standard port
+    option Interface 'lan'  # LAN only
 ```
 
-**Respond:**
+### Enable Logging
+
 ```bash
-# Block scanning IP on OpenWrt
-ssh root@192.168.1.1
-iptables -I INPUT -s <SCANNING_IP> -j DROP
+# Install logging daemon
+opkg install logd
+
+# Configure in /etc/config/system
+config system
+    option log_size '64'
+    option log_ip '192.168.1.100'  # Remote syslog server
+    option log_proto 'udp'
+    option log_port '514'
 ```
 
-### Scenario 2: Malware Download
+### Automated Backup
 
-**Simulate:**
-```bash
-wget http://testmyids.com/
-```
-
-**Detect:**
-```bash
-# Check for malware alert
-grep "EICAR" /var/log/suricata/eve.json | jq
-```
-
-**Respond:**
-```bash
-# Quarantine infected host
-# Block traffic from host
-iptables -I FORWARD -s <INFECTED_IP> -j DROP
-```
-
-### Scenario 3: Data Exfiltration
-
-**Simulate:**
-```bash
-# Large file transfer
-dd if=/dev/urandom of=large_file.bin bs=1M count=100
-curl -X POST -F "file=@large_file.bin" http://example.com/upload
-```
-
-**Detect:**
-```bash
-# Check for exfiltration alerts
-grep "Large Outbound Transfer" /var/log/suricata/fast.log
-```
-
-**Respond:**
-```bash
-# Rate limit outbound connections
-iptables -A OUTPUT -p tcp -m limit --limit 10/s -j ACCEPT
-```
-
----
-
-## Automated Testing Scripts
-
-### Daily Health Check Script
-
-Create `/root/ids-healthcheck.sh`:
+Create `/root/backup.sh`:
 
 ```bash
-#!/bin/bash
+#!/bin/sh
+# Backup OpenWrt configuration
 
-LOG_FILE="/var/log/ids-healthcheck.log"
-DATE=$(date '+%Y-%m-%d %H:%M:%S')
+BACKUP_DIR="/tmp/backups"
+DATE=$(date +%Y%m%d_%H%M%S)
 
-echo "=== IDS Health Check - $DATE ===" >> $LOG_FILE
+mkdir -p $BACKUP_DIR
 
-# Check Suricata service
-if systemctl is-active --quiet suricata; then
-    echo "✓ Suricata service: RUNNING" >> $LOG_FILE
-else
-    echo "✗ Suricata service: STOPPED" >> $LOG_FILE
-    systemctl start suricata
-fi
+# Backup configuration
+sysupgrade -b "$BACKUP_DIR/openwrt-backup-$DATE.tar.gz"
 
-# Check packet processing
-PACKETS=$(sudo suricatasc -c "pcap-current" | jq -r '.message.packets')
-echo "✓ Packets processed: $PACKETS" >> $LOG_FILE
+# Copy to remote location (optional)
+scp "$BACKUP_DIR/openwrt-backup-$DATE.tar.gz" user@192.168.1.100:/backups/
 
-# Check for packet drops
-DROPS=$(sudo suricatasc -c "pcap-current" | jq -r '.message.drop')
-if [ "$DROPS" -gt 100 ]; then
-    echo "⚠ High packet drop rate: $DROPS" >> $LOG_FILE
-fi
-
-# Check log file size
-LOG_SIZE=$(du -h /var/log/suricata/eve.json | cut -f1)
-echo "✓ Log file size: $LOG_SIZE" >> $LOG_FILE
-
-# Check rule update age
-RULE_AGE=$(find /var/lib/suricata/rules -name "*.rules" -mtime +7 | wc -l)
-if [ "$RULE_AGE" -gt 0 ]; then
-    echo "⚠ Rules older than 7 days. Running update..." >> $LOG_FILE
-    sudo suricata-update
-fi
-
-echo "" >> $LOG_FILE
+echo "Backup completed: openwrt-backup-$DATE.tar.gz"
 ```
 
 Add to crontab:
 ```bash
 crontab -e
-# Add:
-0 8 * * * /root/ids-healthcheck.sh
+# Add line:
+0 2 * * 0 /root/backup.sh
 ```
 
 ---
 
-## Validation Checklist
+## Testing and Validation
 
-- [ ] Traffic mirroring functional from OpenWrt to WSL2
-- [ ] Suricata receiving and processing packets
-- [ ] Test alerts generated successfully (EICAR, Nmap, SQL injection)
-- [ ] Alert logs written to eve.json and fast.log
-- [ ] Performance metrics within acceptable range (<1% packet drop)
-- [ ] False positives identified and suppressed
-- [ ] SIEM integration tested and functional
-- [ ] Incident response procedures tested
-- [ ] Automated monitoring scripts deployed
-- [ ] Documentation updated with findings
+### Test Internet Connectivity
+
+```bash
+ping -c 4 8.8.8.8
+nslookup google.com
+```
+
+### Test Firewall Rules
+
+```bash
+# From LAN device
+nmap -sT 192.168.1.1
+
+# Should see only allowed ports open
+```
+
+### Monitor Traffic
+
+```bash
+# Real-time bandwidth monitoring
+vnstat -l -i br-lan
+
+# Live traffic capture
+tcpdump -i br-lan -n
+```
+
+---
+
+## Troubleshooting
+
+### Network Not Working After Changes
+
+```bash
+# Revert network config
+cp /rom/etc/config/network /etc/config/network
+/etc/init.d/network restart
+```
+
+### Can't Access LuCI Web Interface
+
+```bash
+# Restart web server
+/etc/init.d/uhttpd restart
+
+# Check if running
+netstat -tulpn | grep uhttpd
+```
+
+### Firewall Blocking Legitimate Traffic
+
+```bash
+# Temporarily disable firewall
+/etc/init.d/firewall stop
+
+# Check logs
+logread | grep firewall
+
+# Re-enable
+/etc/init.d/firewall start
+```
 
 ---
 
 ## Additional Resources
 
-- [Suricata Testing Documentation](https://suricata.readthedocs.io/en/latest/devguide/unittests.html)
-- [PCAP Testing Files](https://wiki.wireshark.org/SampleCaptures)
-- [IDS Testing Tools](https://github.com/robcowart/testmyids)
-- [Splunk Add-on for Suricata](https://splunkbase.splunk.com/app/2760/)
+- [OpenWrt Documentation](https://openwrt.org/docs/start)
+- [OpenWrt Forum](https://forum.openwrt.org/)
+- [Network Configuration Guide](https://openwrt.org/docs/guide-user/base-system/basic-networking)
+- [Firewall Configuration](https://openwrt.org/docs/guide-user/firewall/start)
 
 ---
 
